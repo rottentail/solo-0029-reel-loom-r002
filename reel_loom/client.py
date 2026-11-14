@@ -47,13 +47,38 @@ class Client:
     def put_look(self, look_id, spec, expected=0):
         return self.request("PUT", "/looks/"+look_id, spec, {"If-Match": str(expected)})
 
-    def render(self, reel_id, look_id, revision=None, look_version=None, key=None):
+    def render(self, reel_id, look_id, revision=None, look_version=None, key=None, audio=None):
         body = {"reel": reel_id, "look": look_id}
         if revision is not None:
             body["revision"] = revision
         if look_version is not None:
             body["look_version"] = look_version
+        if audio is not None:
+            body["audio"] = audio
         return self.request("POST", "/tickets", body, {"Idempotency-Key": key} if key else {})
+
+    def create_dub_track(self, language, takes, key=None):
+        return self.request("POST", "/dub-tracks", {"language": language, "takes": takes},
+                            {"Idempotency-Key": key} if key else {})
+
+    def replace_dub_track(self, track_id, expected, language, takes):
+        return self.request("PUT", "/dub-tracks/"+track_id,
+                            {"language": language, "takes": takes}, {"If-Match": str(expected)})
+
+    def create_dub_order(self, body, key=None):
+        return self.request("POST", "/dub-orders", body,
+                            {"Idempotency-Key": key} if key else {})
+
+    def replace_dub_order(self, order_id, expected, body):
+        return self.request("PUT", "/dub-orders/"+order_id, body, {"If-Match": str(expected)})
+
+    def dub_matrix(self, body, key=None):
+        return self.request("POST", "/dub-matrices", body,
+                            {"Idempotency-Key": key} if key else {})
+
+    def dub_imprint(self, ticket_ids, cue_tracks=None):
+        return self.request("POST", "/dub-imprints",
+                            {"tickets": ticket_ids, "cue_tracks": cue_tracks or []})
 
     def wait(self, ticket_id, timeout=185):
         deadline = time.monotonic()+timeout

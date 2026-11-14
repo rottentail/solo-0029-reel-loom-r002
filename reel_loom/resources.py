@@ -7,7 +7,9 @@ class Resources:
 
     def sweep(self, dry_run=True):
         with self.db.write_unit() as db:
-            protected = {row[0] for row in db.execute("SELECT blob FROM assets UNION SELECT blob FROM artifacts UNION SELECT blob FROM imprints")}
+            protected = {row[0] for row in db.execute(
+                "SELECT blob FROM assets UNION SELECT blob FROM artifacts "
+                "UNION SELECT blob FROM imprints UNION SELECT blob FROM dub_imprints")}
             unreferenced = db.execute("SELECT hash,size FROM blobs ORDER BY hash").fetchall()
             candidates = [dict(row) for row in unreferenced if row["hash"] not in protected]
             removed = []

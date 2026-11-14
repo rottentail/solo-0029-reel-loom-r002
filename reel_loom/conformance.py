@@ -17,7 +17,8 @@ class Conformance:
         spec = ticket["snapshot"]["look"]["spec"]
         path = self.blobs.resolve(artifact["blob"], verify=True)
         metadata = inspect_media(path, self.settings)
-        expected_duration = seconds(ticket["snapshot"]["document"]["duration_tick"])
+        expected_duration = seconds(ticket["snapshot"].get(
+            "output_duration_tick", ticket["snapshot"]["document"]["duration_tick"]))
         actual_duration = seconds(metadata["duration_tick"])
         checks = [{"check": "duration", "passed": abs(expected_duration-actual_duration) <= .15,
                    "expected": expected_duration, "actual": actual_duration}]

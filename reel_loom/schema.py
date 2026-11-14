@@ -1,4 +1,4 @@
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info(version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS blobs(
@@ -26,6 +26,23 @@ CREATE TABLE IF NOT EXISTS cue_tracks(
  id TEXT PRIMARY KEY, asset TEXT NOT NULL REFERENCES assets(id),
  language TEXT NOT NULL, cues TEXT NOT NULL, created REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS dub_tracks(
+ id TEXT PRIMARY KEY, head INTEGER NOT NULL, created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dub_track_versions(
+ track TEXT NOT NULL REFERENCES dub_tracks(id), version INTEGER NOT NULL,
+ document TEXT NOT NULL, hash TEXT NOT NULL, created REAL NOT NULL,
+ PRIMARY KEY(track,version)
+);
+CREATE TABLE IF NOT EXISTS dub_orders(
+ id TEXT PRIMARY KEY, reel TEXT NOT NULL REFERENCES reels(id),
+ head INTEGER NOT NULL, created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dub_order_versions(
+ dub_order TEXT NOT NULL REFERENCES dub_orders(id), version INTEGER NOT NULL,
+ document TEXT NOT NULL, hash TEXT NOT NULL, created REAL NOT NULL,
+ PRIMARY KEY(dub_order,version)
+);
 CREATE TABLE IF NOT EXISTS tickets(
  id TEXT PRIMARY KEY, reel TEXT NOT NULL REFERENCES reels(id), revision INTEGER NOT NULL,
  look_id TEXT NOT NULL, look_version INTEGER NOT NULL,
@@ -52,6 +69,11 @@ CREATE TABLE IF NOT EXISTS analyses(
 CREATE TABLE IF NOT EXISTS imprints(
  id TEXT PRIMARY KEY, ticket TEXT NOT NULL REFERENCES tickets(id),
  manifest TEXT NOT NULL, blob TEXT NOT NULL REFERENCES blobs(hash),
+ fingerprint TEXT NOT NULL UNIQUE, created REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS dub_imprints(
+ id TEXT PRIMARY KEY, manifest TEXT NOT NULL,
+ blob TEXT NOT NULL REFERENCES blobs(hash),
  fingerprint TEXT NOT NULL UNIQUE, created REAL NOT NULL
 );
 CREATE TABLE IF NOT EXISTS events(

@@ -121,6 +121,16 @@
       "id": "timebase",
       "path": "reel_loom/timebase.py",
       "responsibility": "timebase"
+    },
+    {
+      "id": "dubs",
+      "path": "reel_loom/dubs.py",
+      "responsibility": "versioned dubbing tracks and placement orders"
+    },
+    {
+      "id": "dub_imprints",
+      "path": "reel_loom/dub_imprints.py",
+      "responsibility": "multi-language handoff packages"
     }
   ],
   "workflows": [
@@ -439,6 +449,32 @@
         "api",
         "lineage",
         "tickets",
+        "database"
+      ]
+    },
+    {
+      "id": "dubbing",
+      "name": "替代配音与多语言交接",
+      "entry": "POST /dub-tracks,/dub-orders,/dub-matrices,/dub-imprints 与带 audio 的 POST /tickets",
+      "success": "原声与多语言版本同画可选；长句不截断、切点不挪动；某语言失败不毁其他语言；退役后冻结稿仍可复现",
+      "failure": "语言不匹配/缺录音/退役来源在入队前明确拒绝，无效矩阵不入部分任务",
+      "verification": ".venv/bin/python -m reel_loom.demo --workflow dubbing",
+      "steps": [
+        "输入经公开入口到领域规则",
+        "跨媒体或持久化边界提交结果",
+        "回读结果并观察拒绝路径"
+      ],
+      "module_ids": [
+        "api",
+        "dubs",
+        "dub_imprints",
+        "planner",
+        "tickets",
+        "batches",
+        "rendering",
+        "artifacts",
+        "lineage",
+        "resources",
         "database"
       ]
     }

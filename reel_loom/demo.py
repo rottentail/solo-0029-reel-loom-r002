@@ -14,7 +14,8 @@ from .client import Client
 from .errors import LoomError, require
 
 WORKFLOWS = ("ingest", "revisions", "looks", "render", "signal", "waveform", "loudness",
-             "sheet", "captions", "imprint", "cancel-retry", "recovery", "resources", "matrix", "conformance", "lineage")
+             "sheet", "captions", "imprint", "cancel-retry", "recovery", "resources", "matrix",
+             "conformance", "lineage", "dubbing")
 
 
 def expect_error(action, code):
@@ -64,6 +65,13 @@ class Walkthrough:
         ticket = self.client.wait(self.ticket["id"], timeout=5)
         require(ticket["state"] == "succeeded", "walkthrough_render", "Walkthrough render did not succeed", ticket=ticket)
         return ticket
+
+    def make_audio(self, frequency, duration):
+        with self.app.blobs.temporary(".wav") as sample:
+            self.app.processes.run(["-f", "lavfi", "-i",
+                                    f"sine=frequency={frequency}:sample_rate=48000:duration={duration}",
+                                    "-c:a", "pcm_s16le", str(sample)])
+            return sample.read_bytes()
 
     def run(self, name):
         c, a = self.client, self.asset["id"]
@@ -177,6 +185,107 @@ class Walkthrough:
             require(any(n["id"] == imprint["id"] for n in result["nodes"]), "walkthrough_lineage", "Imprint missing from lineage")
             failure = expect_error(lambda: c.request("GET", "/tickets/missing/lineage"), "not_found")
             return {"lineage":result,"failure":failure}
+        if name == "dubbing":
+            en_audio = c.ingest(self.make_audio(440, 1.4), "en-take")
+            jp_audio = c.ingest(self.make_audio(880, 4.0), "jp-take")
+            en_track = c.create_dub_track("en", [{"asset": en_audio["id"], "label": "英语整句"}], "demo-dub-en")
+            jp_track = c.create_dub_track("ja", [{"asset": jp_audio["id"], "label": "日语长句"}], "demo-dub-ja")
+            order = c.create_dub_order({"reel": self.reel["id"], "revision": 1, "language": "en",
+                                        "entries": [{"track": en_track["id"], "start": 0.1}]},
+                                       "demo-dub-order")
+            # A different language cannot be attached to an order that does not cover it.
+            failure = expect_error(lambda: c.create_dub_order(
+                {"reel": self.reel["id"], "revision": 1, "language": "ja",
+                 "entries": [{"track": en_track["id"], "start": 0.1}]}), "dub_language")
+            # Track and order are versioned; stale If-Match is rejected.
+            conflict = expect_error(lambda: c.replace_dub_track(
+                en_track["id"], 9, "en", [{"asset": en_audio["id"]}]), "revision_conflict")
+            c.replace_dub_track(en_track["id"], 1, "en", [{"asset": en_audio["id"]}])
+            en2 = c.request("GET", f'/dub-tracks/{en_track["id"]}?version=2')
+            require(en2["head"] == 2, "walkthrough_dub_version", "Dub track did not advance to version 2")
+            # The long Japanese take starts at 0.05s and runs past the 2.2s reel: it must not be cut.
+            jp_order = c.create_dub_order({"reel": self.reel["id"], "revision": 1, "language": "ja",
+                                           "entries": [{"track": jp_track["id"], "start": 0.05}]})
+            reel_duration = self.reel["document"]["duration_tick"]
+            require(jp_order["document"]["program_duration_tick"] > reel_duration,
+                    "walkthrough_dub_length", "A longer take must extend the program rather than truncate")
+            original = c.render(self.reel["id"], "listening", key="dub-original")
+            en_ticket = c.render(self.reel["id"], "listening",
+                                 audio={"mode": "dub", "dub_order": order["id"], "language": "en"})
+            jp_ticket = c.render(self.reel["id"], "listening",
+                                 audio={"mode": "dub", "dub_order": jp_order["id"], "language": "ja"})
+            # Atomic multi-language matrix: one missing recording rejects the whole submission.
+            bad_matrix = expect_error(lambda: c.dub_matrix(
+                {"reel": self.reel["id"], "looks": [{"id": "listening"}],
+                 "dubs": [{"dub_order": order["id"], "language": "en"},
+                          {"dub_order": order["id"], "language": "ja"}]}), "dub_language")
+            matrix = c.dub_matrix({"reel": self.reel["id"], "looks": [{"id": "listening"}],
+                                   "dubs": [{"dub_order": order["id"], "language": "en"},
+                                            {"dub_order": jp_order["id"], "language": "ja"}]},
+                                  "demo-dub-matrix")
+            before = len(c.request("GET", "/tickets")["items"])
+            expect_error(lambda: c.dub_matrix(
+                {"reel": self.reel["id"], "looks": [{"id": "missing"}],
+                 "dubs": [{"dub_order": order["id"], "language": "en"}]}), "not_found")
+            require(len(c.request("GET", "/tickets")["items"]) == before,
+                    "walkthrough_dub_matrix", "Invalid dub matrix committed partial tickets")
+            while self.app.renderer.run_once() is not None:
+                pass
+            rendered = {t["id"]: c.wait(t["id"], 10) for t in matrix["tickets"]}
+            require(all(t["state"] == "succeeded" for t in rendered.values()),
+                    "walkthrough_dub_render", "A language rendition failed in the matrix")
+            original = c.wait(original["id"], 10)
+            en_ticket = c.wait(en_ticket["id"], 10)
+            jp_ticket = c.wait(jp_ticket["id"], 10)
+            # The legacy original request keeps the reel duration; dubbed output keeps the full sentence.
+            from .timebase import seconds as to_seconds
+            orig_meta = original["artifacts"][0]["metadata"]
+            jp_meta = jp_ticket["artifacts"][0]["metadata"]
+            require(abs(to_seconds(orig_meta["duration_tick"]) - to_seconds(reel_duration)) <= 0.15,
+                    "walkthrough_original_duration", "Original audio rendition changed duration")
+            require(to_seconds(jp_meta["duration_tick"]) > to_seconds(reel_duration) + 1.0,
+                    "walkthrough_dub_truncation", "The long Japanese sentence was truncated")
+            require(en_ticket["snapshot"]["dub"]["order_hash"] == order["hash"],
+                    "walkthrough_dub_freeze", "Render snapshot lost the frozen dub order")
+            # Conformance validates the dubbed full-duration output against its frozen plan.
+            conform = c.request("GET", f'/artifacts/{jp_ticket["artifacts"][0]["id"]}/conformance')
+            require(conform["valid"], "walkthrough_dub_conformance", "Dub rendition failed conformance", report=conform)
+            # A ticket frozen before retirement stays reproducible even once its recording is retired.
+            frozen = c.render(self.reel["id"], "listening",
+                              audio={"mode": "dub", "dub_order": order["id"], "language": "en"},
+                              key="demo-dub-frozen")
+            require(frozen["state"] == "queued", "walkthrough_dub_queued", "Frozen ticket should wait in the queue")
+            c.request("POST", f"/assets/{en_audio['id']}/retire")
+            retired_failure = expect_error(lambda: c.render(
+                self.reel["id"], "listening",
+                audio={"mode": "dub", "dub_order": order["id"], "language": "en"}), "asset_retired")
+            self.app.renderer.run_once()
+            recovered = c.wait(frozen["id"], 10)
+            require(recovered["state"] == "succeeded", "walkthrough_dub_repro",
+                    "A queued/frozen dub could not be reproduced after retirement")
+            # A failed/cancelled frozen ticket can also be retried against its original snapshot.
+            victim = c.render(self.reel["id"], "listening",
+                              audio={"mode": "dub", "dub_order": jp_order["id"], "language": "ja"})
+            c.request("POST", f"/tickets/{victim['id']}/cancel")
+            retried = c.request("POST", f"/tickets/{victim['id']}/retry")
+            self.app.renderer.run_once()
+            retried_done = c.wait(victim["id"], 10)
+            require(retried_done["state"] == "succeeded" and retried["attempt"] == 2,
+                    "walkthrough_dub_retry", "Cancelled dub ticket did not retry on its frozen snapshot")
+            c.request("POST", f"/assets/{en_audio['id']}/restore")
+            # Handoff package lets the receiver pick original, en or ja, with provenance per version.
+            imprint = c.dub_imprint([original["id"], en_ticket["id"], jp_ticket["id"]])
+            require({s["version"] for s in imprint["manifest"]["selections"]} == {"original", "en", "ja"},
+                    "walkthrough_dub_handoff", "Handoff package is missing a selectable version")
+            verified = c.request("GET", f'/dub-imprints/{imprint["id"]}/verify')
+            require(set(verified["verified_versions"]) == {"original", "en", "ja"},
+                    "walkthrough_dub_verify", "Dub imprint verification incomplete")
+            lineage = c.request("GET", f'/tickets/{jp_ticket["id"]}/lineage')
+            require(any(n["kind"] == "dub_order" for n in lineage["nodes"]),
+                    "walkthrough_dub_lineage", "Dub order missing from lineage")
+            return {"matrix": matrix["id"], "original_seconds": to_seconds(orig_meta["duration_tick"]),
+                    "japanese_seconds": to_seconds(jp_meta["duration_tick"]),
+                    "imprint": imprint["id"], "failures": [failure, conflict, bad_matrix, retired_failure]}
         raise ValueError("Unknown walkthrough: " + name)
 
 

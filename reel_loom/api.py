@@ -31,11 +31,13 @@ class Api:
             return app.health()
         if method == "GET" and route == "/":
             return {"name": "声画织场", "api": self.prefix,
-                    "resources": ["assets", "reels", "looks", "tickets", "analyses", "artifacts", "imprints"],
+                    "resources": ["assets", "reels", "looks", "tickets", "analyses", "artifacts",
+                                  "imprints", "dub-tracks", "dub-orders", "dub-imprints"],
                     "time_units": "seconds at input; integer microseconds in frozen records",
                     "render_modes": ["video/h264+aac", "audio/pcm_s16le"],
                     "editing": "ordered hard cuts; immutable revisions",
-                    "captions": "source SRT tracks projected to a reel revision"}
+                    "captions": "source SRT tracks projected to a reel revision",
+                    "dubbing": "versioned dub tracks/orders; tickets select original or a language"}
         if route == "/assets":
             if method == "POST":
                 return app.assets.ingest(raw, headers.get("X-Media-Label", "未命名媒体"))
@@ -99,6 +101,44 @@ class Api:
         matrix = re.fullmatch(r"/matrices/([^/]+)", route)
         if matrix and method == "GET":
             return app.batches.get(matrix[1])
+        if route == "/dub-matrices" and method == "POST":
+            return app.dub_batches.submit(self.json_body(raw), headers.get("Idempotency-Key"))
+        dub_matrix = re.fullmatch(r"/dub-matrices/([^/]+)", route)
+        if dub_matrix and method == "GET":
+            return app.dub_batches.get(dub_matrix[1])
+        if route == "/dub-tracks":
+            if method == "GET":
+                return {"items": app.dubs.list_tracks()}
+            if method == "POST":
+                return app.dubs.create_track(self.json_body(raw), headers.get("Idempotency-Key"))
+        track_match = re.fullmatch(r"/dub-tracks/([^/]+)(?:/history)?", route)
+        if track_match:
+            track_id = track_match.group(1)
+            if method == "GET" and route.endswith("/history"):
+                return {"items": app.dubs.track_history(track_id)}
+            if method == "GET":
+                return app.dubs.get_track(track_id, self.query_integer(query, "version"))
+            if method == "PUT":
+                return app.dubs.replace_track(track_id, self.expected(headers), self.json_body(raw))
+        if route == "/dub-orders":
+            if method == "GET":
+                return {"items": app.dubs.list_orders()}
+            if method == "POST":
+                return app.dubs.create_order(self.json_body(raw), headers.get("Idempotency-Key"))
+        order_match = re.fullmatch(r"/dub-orders/([^/]+)(?:/history)?", route)
+        if order_match:
+            order_id = order_match.group(1)
+            if method == "GET" and route.endswith("/history"):
+                return {"items": app.dubs.order_history(order_id)}
+            if method == "GET":
+                return app.dubs.get_order(order_id, self.query_integer(query, "version"))
+            if method == "PUT":
+                return app.dubs.replace_order(order_id, self.expected(headers), self.json_body(raw))
+        if route == "/dub-imprints":
+            if method == "GET":
+                return {"items": app.dub_imprints.list()}
+            if method == "POST":
+                return app.dub_imprints.create(self.json_body(raw))
         if route == "/tickets":
             if method == "GET":
                 return {"items": app.tickets.list(query.get("state"))}
@@ -118,18 +158,21 @@ class Api:
                 return getattr(app.tickets, action)(ticket_id)
             if method == "POST" and action == "imprints":
                 return app.imprints.create(ticket_id, self.json_body(raw))
-        match = re.fullmatch(r"/(analyses|cues|artifacts|imprints)/([^/]+)(?:/(verify|content|conformance))?", route)
+        match = re.fullmatch(r"/(analyses|cues|artifacts|imprints|dub-imprints)/([^/]+)(?:/(verify|content|conformance))?", route)
         if match and method == "GET":
             kind, entity_id, action = match.groups()
             if action == "conformance" and kind == "artifacts":
                 return app.conformance.inspect(entity_id)
             if action == "verify" and kind == "imprints":
                 return app.imprints.verify(entity_id)
+            if action == "verify" and kind == "dub-imprints":
+                return app.dub_imprints.verify(entity_id)
             service = {"analyses": app.analysis, "cues": app.captions,
-                       "artifacts": app.artifacts, "imprints": app.imprints}[kind]
+                       "artifacts": app.artifacts, "imprints": app.imprints,
+                       "dub-imprints": app.dub_imprints}[kind]
             result = service.get(entity_id)
-            if action == "content" and kind in ("artifacts", "imprints"):
-                mime = "application/zip" if kind == "imprints" else result["metadata"].get("mime", "application/octet-stream")
+            if action == "content" and kind in ("artifacts", "imprints", "dub-imprints"):
+                mime = "application/zip" if kind in ("imprints", "dub-imprints") else result["metadata"].get("mime", "application/octet-stream")
                 return Download(app.blobs.resolve(result["blob"], verify=True), mime, entity_id, result["blob"])
             if not action:
                 return result

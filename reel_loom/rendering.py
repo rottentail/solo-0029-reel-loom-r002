@@ -21,7 +21,7 @@ class Renderer:
         try:
             with self.blobs.temporary(suffix) as output:
                 args = self.planner.compile(snapshot, lambda key: self.blobs.resolve(key, verify=True), output)
-                duration = seconds(snapshot["document"]["duration_tick"])
+                duration = seconds(snapshot.get("output_duration_tick", snapshot["document"]["duration_tick"]))
                 self.processes.run(args,
                     cancelled=lambda: self.stopping.is_set() or self.tickets.cancellation_requested(ticket_id),
                     progress=lambda value: self.tickets.progress(ticket_id, value), duration=duration)

@@ -34,6 +34,11 @@ python3 -m venv .venv
 | 版式 | `PUT /looks/{id}`，`{"kind":"video","width":640,"height":360,"fit":"contain"}`；更新需 `If-Match` |
 | 编码 | `POST /tickets`，`{"reel":"reel_…","look":"preview"}`；可指定 `revision`、`look_version` |
 | 渲染矩阵 | `POST /matrices`，`{"reel":"reel_…","looks":[{"id":"preview"},{"id":"listening"}]}` |
+| 配音轨 | `POST /dub-tracks`，`{"language":"ja","takes":[{"asset":"asset_…"}]}`；`PUT` 需 `If-Match` |
+| 配音令 | `POST /dub-orders`，`{"reel":"reel_…","revision":1,"language":"ja","entries":[{"track":"dub_…","start":0.05}]}` |
+| 配音成片 | `POST /tickets`，`{"reel":"reel_…","look":"listening","audio":{"mode":"dub","dub_order":"duborder_…","language":"ja"}}` |
+| 多语言矩阵 | `POST /dub-matrices`，`{"reel":"reel_…","looks":[{"id":"listening"}],"dubs":[{"dub_order":"duborder_…","language":"ja"}]}` |
+| 配音交付印本 | `POST /dub-imprints`，`{"tickets":["render_…","render_…"]}`；`GET /dub-imprints/{id}/verify` |
 | 状态/取消/重试 | `GET /tickets/{id}`，`POST /tickets/{id}/cancel`、`retry` |
 | 音频测量 | `POST /assets/{id}/signal`、`waveform`、`loudness`，默认请求 `{}` |
 | 画面索引 | `POST /assets/{id}/contact-sheet`，`{"count":9,"columns":3}` |
@@ -49,6 +54,18 @@ python3 -m venv .venv
 
 视频版式输出 H.264/AAC MP4，音频版式输出 PCM WAV；版式支持 1/2 声道、采样率、常量增益、contain/cover 和恒定帧率。剪辑卷当前采用顺序硬切，不具备多轨、转场、变速、字幕烧录或分段流能力。字幕保留源时间并在投影时按剪辑区间裁切；字幕轨创建后不可变。signal 输出 dBFS，loudness 才是 EBU R128，二者不可互换。
 
+## 替代配音（多语言版本）
+
+一份剪辑卷可以同时保留原声版和多个语言配音版，交接时由交付印本逐版本列出，接收方明确选择听哪一版。
+
+- **配音轨 `dub-tracks`**：某语言录好的一个或多个 take（引用 ready 音频来源），以 `If-Match` 做不可变版本化；历史版本始终可读。
+- **配音令 `dub-orders`**：把配音轨按各自在输出时间轴上的起始位置（秒）配到指定剪辑修订上，同样版本化并冻结所用 take 的内容摘要。配音令绑定具体卷与修订，修订改稿后需重新制作配音令。
+- **渲染选择**：`POST /tickets` 省略 `audio` 或传 `{"mode":"original"}` 时完全沿用旧的镜段原声行为；传 `{"mode":"dub",...}` 则替换为指定语言。选择连同配音令版本、take 来源一起冻结进渲染快照与指纹。
+- **不截断、不挪镜**：镜段切点与画面位置保持不变。配音比画面长时，输出时长冻结为片长与最晚配音结束时刻的较大者；视频在尾部定格最后一帧、音频补静，整句完整保留，绝不裁掉半句或悄悄移动镜头。配音比画面短时，尾部保留静音床。
+- **失败隔离**：`/dub-matrices` 为每个语言×版式生成独立渲染单，入队整体校验、不产生部分任务；执行期某语言失败只标记该单，其他语言照常成功并可交付。某语言缺少可用录音时在入队前以 `dub_take_missing`/`dub_language` 明确拒绝。
+- **退役与复现**：录音来源退役后，新引用以 `asset_retired` 明确拒绝；已排队和已交付的版本因快照内含 blob 闭包仍可重试、复现与校验。恢复来源先核对摘要。
+- **一致性与交接**：剪辑修订、真实试听成片、`/dub-imprints` 印本共用同一份冻结快照；印本 manifest 为每个可选版本记录语言、渲染单、版式、指纹与逐 take 的配音来源（起始位置、内容摘要），ZIP 成员确定且可重新读包校验。
+
 ## 构建与生产流程校验
 
 ```bash
@@ -56,6 +73,6 @@ python3 -m venv .venv
 .venv/bin/python -m reel_loom.demo --workflow conformance
 ```
 
-全部 16 个有界流程记录在 `.project-runtime.json`，每条都经过真实领域与持久化路径，并观察成功或拒绝结果。测试延后：基线不包含单元/集成测试文件、不声明 test_command；这些生产示例不是完整测试保障。后续质量保障任务可从这些入口补建测试。
+全部 17 个有界流程记录在 `.project-runtime.json`，每条都经过真实领域与持久化路径，并观察成功或拒绝结果。测试延后：基线不包含单元/集成测试文件、不声明 test_command；这些生产示例不是完整测试保障。后续质量保障任务可从这些入口补建测试。
 
 源映射见 `.task-source.json`，业务边界见 `PROJECT_SPEC.md`。题库和内部难度证据在仓库外独立维护，不属于基线运行依赖。

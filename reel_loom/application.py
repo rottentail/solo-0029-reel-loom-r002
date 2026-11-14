@@ -15,9 +15,11 @@ from .frames import Frames
 from .imprints import Imprints
 from .resources import Resources
 from .instance import InstanceLock
-from .batches import RenderBatches
+from .batches import RenderBatches, DubBatches
 from .conformance import Conformance
 from .lineage import Lineage
+from .dubs import Dubs
+from .dub_imprints import DubImprints
 
 
 class Application:
@@ -31,18 +33,21 @@ class Application:
             self.keys = RequestKeys()
             self.assets = Assets(self.db, self.blobs, settings)
             self.reels = Reels(self.db, self.assets, self.keys, settings)
+            self.dubs = Dubs(self.db, self.assets, self.keys, settings).bind_reels(self.reels)
             self.looks = Looks(self.db)
             self.captions = Captions(self.db, self.assets, self.reels)
-            self.planner = Planner(self.assets, self.reels, self.looks)
+            self.planner = Planner(self.assets, self.reels, self.looks, self.dubs)
             self.processes = Processes(settings)
             self.tickets = Tickets(self.db, self.planner, self.keys)
             self.artifacts = Artifacts(self.db, self.blobs)
             self.batches = RenderBatches(self.db, self.planner, self.tickets, self.keys)
+            self.dub_batches = DubBatches(self.db, self.planner, self.tickets, self.keys)
             self.conformance = Conformance(settings, self.blobs, self.tickets, self.artifacts)
             self.lineage = Lineage(self.db, self.tickets)
             self.analysis = AudioAnalysis(self.db, self.assets, self.blobs, self.processes)
             self.frames = Frames(self.assets, self.blobs, self.processes, self.artifacts)
             self.imprints = Imprints(self.db, self.blobs, self.tickets, self.captions)
+            self.dub_imprints = DubImprints(self.db, self.blobs, self.tickets, self.captions)
             self.resources = Resources(self.db, self.blobs)
             self.recovery = self.tickets.recover()
             self.renderer = Renderer(settings, self.blobs, self.tickets, self.planner, self.processes, self.artifacts)

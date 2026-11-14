@@ -26,6 +26,19 @@ class Lineage:
                 blob_key = add(source["blob"], "blob", {})
                 edges.append({"from": revision, "to": source_key, "relation": "includes"})
                 edges.append({"from": source_key, "to": blob_key, "relation": "content"})
+            if snapshot.get("dub"):
+                order = snapshot["dub"]
+                order_key = add(f'{order["order"]}@{order["order_version"]}', "dub_order",
+                                {"language": order["language"], "order_hash": order["order_hash"],
+                                 "entries": order["document"]["entries"]})
+                edges.append({"from": render, "to": order_key, "relation": "dubbed_with"})
+                for entry in order["document"]["entries"]:
+                    source_key = add(entry["asset"], "dub_recording",
+                                     {"language": entry["language"], "start_tick": entry["start_tick"],
+                                      "end_tick": entry["end_tick"]})
+                    edges.append({"from": order_key, "to": source_key, "relation": "records"})
+                    blob_key = add(entry["blob"], "blob", {})
+                    edges.append({"from": source_key, "to": blob_key, "relation": "content"})
             for artifact in ticket["artifacts"]:
                 key = add(artifact["id"], artifact["kind"], artifact["metadata"])
                 blob_key = add(artifact["blob"], "blob", {})
@@ -34,6 +47,13 @@ class Lineage:
             for row in db.execute("SELECT id,blob,fingerprint FROM imprints WHERE ticket=? ORDER BY created,id", (ticket_id,)):
                 key = add(row["id"], "imprint", {"fingerprint": row["fingerprint"]})
                 blob_key = add(row["blob"], "blob", {})
+                edges.extend([{"from": key, "to": render, "relation": "packages"},
+                              {"from": key, "to": blob_key, "relation": "content"}])
+            for row in db.execute("SELECT payload FROM events WHERE subject=? AND kind='dub_imprinted' ORDER BY sequence",
+                                  (ticket_id,)):
+                payload = json.loads(row["payload"])
+                key = add(payload["imprint"], "dub_imprint", {})
+                blob_key = add(payload["blob"], "blob", {})
                 edges.extend([{"from": key, "to": render, "relation": "packages"},
                               {"from": key, "to": blob_key, "relation": "content"}])
             require(all(e["from"] in nodes and e["to"] in nodes for e in edges), "lineage_closure", "Incomplete rendition lineage", 409)
